@@ -355,7 +355,8 @@ class PeakFinderMainWindow(QMainWindow):
             self, 
             "Processing Complete", 
             f"Successfully processed {total_count} features.\n"
-            f"Matched {matched_count} features ({match_rate:.1f}% success rate)."
+            f"Matched {matched_count} features ({match_rate:.1f}% success rate).\n\n"
+            f"Use the Delete button or Del key to exclude features from export."
         )
         
     def on_processing_error(self, error_message):
@@ -377,6 +378,32 @@ class PeakFinderMainWindow(QMainWindow):
             QMessageBox.warning(self, "Warning", "Please enter a feature list name.")
             return
         
+        # Get only active (non-deleted) features
+        active_df = self.spectrum_viewer.get_active_features_df()
+        if active_df is None or len(active_df) == 0:
+            QMessageBox.warning(self, "Warning", "No active features to export. All features have been deleted.")
+            return
+        
+        deleted_count = self.spectrum_viewer.get_deleted_count()
+        total_count = len(self.processed_df)
+        active_count = len(active_df)
+        
+        # Confirm export with user
+        reply = QMessageBox.question(
+            self, 
+            "Confirm Export", 
+            f"Export {active_count} active features to SCILSLab?\n\n"
+            f"Total features: {total_count}\n"
+            f"Active features: {active_count}\n"
+            f"Deleted features: {deleted_count}\n\n"
+            f"Feature list name: '{feature_list_name}'",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes
+        )
+        
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        
         try:
             # Import here to avoid circular imports
             from peak_matcher import create_feature_list
@@ -389,12 +416,15 @@ class PeakFinderMainWindow(QMainWindow):
             session = LocalSession(filename=slx_file)
             
             try:
-                create_feature_list(session, feature_list_name, self.processed_df)
+                create_feature_list(session, feature_list_name, active_df)
                 self.log_message(f"Feature list '{feature_list_name}' created successfully!")
+                self.log_message(f"Exported {active_count} active features (excluded {deleted_count} deleted features)")
                 QMessageBox.information(
                     self, 
                     "Export Complete", 
-                    f"Feature list '{feature_list_name}' has been created in SCILSLab."
+                    f"Feature list '{feature_list_name}' has been created in SCILSLab.\n\n"
+                    f"Exported {active_count} active features.\n"
+                    f"Excluded {deleted_count} deleted features."
                 )
             finally:
                 session.close()

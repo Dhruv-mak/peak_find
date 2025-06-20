@@ -31,6 +31,8 @@ A beautiful, futuristic PyQt6 interface for advanced mass spectrometry peak find
 - **Real-time boundary updates**
 - **Feature navigation** with arrow keys or buttons
 - **Editable feature names**
+- **Feature deletion/restoration** with visual feedback
+- **Export filtering** to exclude unwanted features
 
 ### 🔬 Processing Engine
 - **Multi-threaded processing** to keep GUI responsive
@@ -97,17 +99,22 @@ Switch to the "Parameters" tab to configure:
 - **Navigate features** using arrow keys or buttons
 - **Edit feature names** directly in the interface
 - **Drag boundary lines** to manually adjust peak boundaries
+- **Delete/restore features** using the Delete button or Del key
 - **Zoom and explore** the spectrum interactively
+- **Visual feedback** for deleted features (red title, disabled editing)
 
 ### 5. Export Results
-1. Enter a **feature list name**
-2. Click **"📤 Export to SCILSLab"**
-3. Features will be created in your SLX file
+1. **Review features** and delete any unwanted ones
+2. Enter a **feature list name**
+3. Click **"📤 Export to SCILSLab"**
+4. **Confirm export** with deletion summary
+5. Only active (non-deleted) features will be created in your SLX file
 
 ## ⌨️ Keyboard Shortcuts
 
 - **Left Arrow**: Previous feature
 - **Right Arrow**: Next feature
+- **Delete**: Delete/restore current feature
 - **Tab**: Navigate between controls
 - **Enter**: Confirm text input
 

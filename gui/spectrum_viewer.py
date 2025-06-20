@@ -104,15 +104,15 @@ class InteractivePlot(FigureCanvas):
         self.ax.set_ylabel('Intensity', color='white', fontsize=12)
         self.ax.grid(True, alpha=0.3, color='gray')
         self.ax.legend(loc='upper right')
-        
-        # Set title with feature info
+          # Set title with feature info
         if self.current_feature is not None:
             feature_name = self.current_feature.get('Name', 'Unknown')
             target_mz = self.current_feature.get('m/z', 0)
             self.ax.set_title(f'Feature: {feature_name} (m/z: {target_mz:.4f})', 
                             color='white', fontsize=14, fontweight='bold')
         else:
-            self.ax.set_title('Mass Spectrum', color='white', fontsize=14, fontweight='bold')
+            self.ax.set_title('Mass Spectrum - Feature Deleted', 
+                            color='#E74C3C', fontsize=14, fontweight='bold')
             
         self.draw()
         
@@ -236,6 +236,7 @@ class SpectrumViewer(QWidget):
         self.processed_df = None
         self.spectrum_data = None
         self.current_index = 0
+        self.deleted_features = set()  # Track deleted feature indices
         
         self.init_ui()
         self.setup_shortcuts()
@@ -301,6 +302,13 @@ class SpectrumViewer(QWidget):
         layout.addLayout(info_layout)
         
         layout.addStretch()
+          # Delete button
+        self.delete_btn = QPushButton("🗑️ Delete")
+        self.delete_btn.setFixedSize(100, 35)
+        self.delete_btn.setStyleSheet(self.get_button_style("#E74C3C"))
+        self.delete_btn.clicked.connect(self.delete_current_feature)
+        self.delete_btn.setToolTip("Delete this feature (Del key)")
+        layout.addWidget(self.delete_btn)
         
         # Next button
         self.next_btn = QPushButton("Next ▶")
@@ -308,10 +316,10 @@ class SpectrumViewer(QWidget):
         self.next_btn.setStyleSheet(self.get_button_style("#27AE60"))
         self.next_btn.clicked.connect(self.next_feature)
         layout.addWidget(self.next_btn)
-        
-        # Initially disable navigation
+          # Initially disable navigation and delete
         self.prev_btn.setEnabled(False)
         self.next_btn.setEnabled(False)
+        self.delete_btn.setEnabled(False)
         
         return control_widget
         
@@ -351,29 +359,35 @@ class SpectrumViewer(QWidget):
         
         right_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Right), self)
         right_shortcut.activated.connect(self.next_feature)
+          # Delete key for removing features
+        delete_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Delete), self)
+        delete_shortcut.activated.connect(self.delete_current_feature)
         
     def set_data(self, processed_df, spectrum_data):
         """Set data for the viewer"""
         self.processed_df = processed_df.copy()
         self.spectrum_data = spectrum_data
         self.current_index = 0
+        self.deleted_features = set()  # Reset deleted features for new data
         
-        # Enable navigation if we have data
+        # Enable navigation and delete if we have data
         if len(self.processed_df) > 0:
             self.prev_btn.setEnabled(True)
             self.next_btn.setEnabled(True)
+            self.delete_btn.setEnabled(True)
             self.update_display()
-        else:
-            self.counter_label.setText("No features found")
+        else:            self.counter_label.setText("No features found")
             
     def update_display(self):
         """Update the display with current feature"""
         if self.processed_df is None or len(self.processed_df) == 0:
             return
             
-        # Update counter
+        # Update counter with deletion status
         total = len(self.processed_df)
-        self.counter_label.setText(f"Feature {self.current_index + 1} of {total}")
+        active_count = total - len(self.deleted_features)
+        deleted_status = " [DELETED]" if self.current_index in self.deleted_features else ""
+        self.counter_label.setText(f"Feature {self.current_index + 1} of {total} ({active_count} active){deleted_status}")
         
         # Get current feature
         current_feature = self.processed_df.iloc[self.current_index]
@@ -382,13 +396,33 @@ class SpectrumViewer(QWidget):
         feature_name = current_feature.get('Name', '')
         self.name_edit.setText(str(feature_name))
         
-        # Update plot
-        self.plot.set_data(self.spectrum_data['mz'], self.spectrum_data['intensities'])
-        self.plot.set_current_feature(current_feature)
+        # Disable name editing if feature is deleted
+        self.name_edit.setEnabled(self.current_index not in self.deleted_features)
+        
+        # Update plot (only if not deleted)
+        if self.current_index not in self.deleted_features:
+            self.plot.set_data(self.spectrum_data['mz'], self.spectrum_data['intensities'])
+            self.plot.set_current_feature(current_feature)
+        else:
+            # Show empty plot for deleted features
+            self.plot.set_data(self.spectrum_data['mz'], self.spectrum_data['intensities'])
+            self.plot.set_current_feature(None)
         
         # Update button states
         self.prev_btn.setEnabled(self.current_index > 0)
         self.next_btn.setEnabled(self.current_index < total - 1)
+        self.delete_btn.setEnabled(self.current_index not in self.deleted_features)
+        
+        # Update delete button text based on status
+        if self.current_index in self.deleted_features:
+            self.delete_btn.setText("🔄 Restore")
+            self.delete_btn.setStyleSheet(self.get_button_style("#F39C12"))
+            self.delete_btn.setToolTip("Restore this feature")
+            self.delete_btn.setEnabled(True)  # Allow restoration
+        else:
+            self.delete_btn.setText("🗑️ Delete")
+            self.delete_btn.setStyleSheet(self.get_button_style("#E74C3C"))
+            self.delete_btn.setToolTip("Delete this feature (Del key)")
         
     def previous_feature(self):
         """Navigate to previous feature"""
@@ -429,3 +463,31 @@ class SpectrumViewer(QWidget):
             
             self.processed_df.iloc[self.current_index, self.processed_df.columns.get_loc('peak_width_da')] = peak_width_da
             self.processed_df.iloc[self.current_index, self.processed_df.columns.get_loc('peak_width_ppm')] = peak_width_ppm
+            
+    def delete_current_feature(self):
+        """Delete or restore the current feature"""
+        if self.processed_df is None or len(self.processed_df) == 0:
+            return
+            
+        if self.current_index in self.deleted_features:
+            # Restore the feature
+            self.deleted_features.remove(self.current_index)
+        else:
+            # Delete the feature
+            self.deleted_features.add(self.current_index)
+            
+        # Update display to reflect change
+        self.update_display()
+        
+    def get_active_features_df(self):
+        """Get a dataframe with only active (non-deleted) features"""
+        if self.processed_df is None:
+            return None
+            
+        # Filter out deleted features
+        active_mask = ~self.processed_df.index.isin(self.deleted_features)
+        return self.processed_df[active_mask].copy()
+        
+    def get_deleted_count(self):
+        """Get the number of deleted features"""
+        return len(self.deleted_features)

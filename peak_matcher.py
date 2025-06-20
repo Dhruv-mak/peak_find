@@ -231,7 +231,9 @@ def load_spectrum_data(session, region_id=None):
         return None, None
 
     # Get mean spectrum for the specified region
-    mean_spectra = dataset.get_mean_spectrum(region_id=region_id, normalization_id="Total Ion Count")
+    mean_spectra = dataset.get_mean_spectrum(
+        region_id=region_id, normalization_id="Total Ion Count"
+    )
     # mean_spectra = dataset.get_mean_spectrum("Regions", region_id)
 
     mz = mean_spectra["mz"]
@@ -264,7 +266,19 @@ def create_spectrum_plot(mz, intensities, output_path=None):
 def create_feature_list(session, feature_list_name, processed_df):
     dataset = session.dataset_proxy
 
-    processed_df = processed_df[processed_df["left_boundary_mz"] < processed_df["right_boundary_mz"]]
+    print(
+        f"features with same left and right {len(processed_df[processed_df['left_boundary_mz'] == processed_df['right_boundary_mz']])}"
+    )
+
+    # For features with same left and right boundaries, set to mz ± 30 ppm
+    same_boundaries_mask = processed_df['left_boundary_mz'] == processed_df['right_boundary_mz']
+    processed_df.loc[same_boundaries_mask, 'left_boundary_mz'] = processed_df.loc[same_boundaries_mask, 'm/z'] * (1 - 30 / 1e6)
+    processed_df.loc[same_boundaries_mask, 'right_boundary_mz'] = processed_df.loc[same_boundaries_mask, 'm/z'] * (1 + 30 / 1e6)
+    
+    # Now filter out any remaining invalid boundaries (should be none after the fix above)
+    processed_df = processed_df[
+        processed_df["left_boundary_mz"] < processed_df["right_boundary_mz"]
+    ]
     found_mz_intervals = [
         [left, right]
         for left, right in zip(
@@ -276,31 +290,30 @@ def create_feature_list(session, feature_list_name, processed_df):
     new_mz_features = feature_table.write_mz_features(
         new_feature_list_id,
         found_mz_intervals,
-        # names=processed_df['Name'].tolist(),
-        names=[
-            x + "_auto" for x in processed_df["Name"].tolist()
-        ],  # won't be required in the future
-    )
-    
-    
-    # add old intervals as well with +- 30 ppm, Only for testing purposes
-    old_intervals = [
-        [mz * (1 - 30 / 1e6), mz * (1 + 30 / 1e6)] for mz in processed_df["m/z"].tolist()
-    ]
-    old_mz_features = feature_table.write_mz_features(
-        new_feature_list_id,
-        old_intervals,
-        names=[
-            x + "_old" for x in processed_df["Name"].tolist()
-        ],
+        names=processed_df["Name"].tolist(),
+        # names=[
+        #     x + "_auto" for x in processed_df["Name"].tolist()
+        # ],  # won't be required in the future
     )
 
-    # if len(found_mz_intervals) != len(new_mz_features):
-    #     print(
-    #         f"Warning: Mismatch in number of intervals and features created. "
-    #         f"Expected {len(found_mz_intervals)}, got {len(new_mz_features)}",
-    #         file=sys.stderr,
-    #     )
+    # add old intervals as well with +- 30 ppm, Only for testing purposes
+    # old_intervals = [
+    #     [mz * (1 - 30 / 1e6), mz * (1 + 30 / 1e6)] for mz in processed_df["m/z"].tolist()
+    # ]
+    # old_mz_features = feature_table.write_mz_features(
+    #     new_feature_list_id,
+    #     old_intervals,
+    #     names=[
+    #         x + "_old" for x in processed_df["Name"].tolist()
+    #     ],
+    # )
+
+    if len(found_mz_intervals) != len(new_mz_features):
+        print(
+            f"Warning: Mismatch in number of intervals and features created. "
+            f"Expected {len(found_mz_intervals)}, got {len(new_mz_features)}",
+            file=sys.stderr,
+        )
 
     print(
         f"Feature list '{feature_list_name}' created with {len(new_mz_features)} features."
@@ -487,11 +500,9 @@ def main():
         if args.output:
             final_results.to_csv(args.output, index=False)
             print(f"\n✅ Results saved to: {args.output}")
-        
+
         try:
-            create_feature_list(
-                global_session, args.feature_list_name, final_results
-            )
+            create_feature_list(global_session, args.feature_list_name, final_results)
             print(f"Feature list '{args.feature_list_name}' created successfully.")
         except Exception as e:
             print(
