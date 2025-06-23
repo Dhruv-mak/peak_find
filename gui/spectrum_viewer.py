@@ -2,7 +2,7 @@
 Interactive Spectrum Viewer Widget
 
 Provides an interactive plot for viewing spectra with draggable boundaries
-and navigation between features.
+and navigation between features using PyQtGraph for smooth, natural interactions.
 """
 
 import numpy as np
@@ -12,66 +12,57 @@ from PyQt6.QtWidgets import (
     QPushButton, QSlider, QSizePolicy, QMessageBox
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
-from PyQt6.QtGui import QFont, QKeySequence, QShortcut
+from PyQt6.QtGui import QFont, QKeySequence, QShortcut, QColor
 
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
-from matplotlib.figure import Figure
-from matplotlib.patches import Rectangle
-import matplotlib.patches as mpatches
+import pyqtgraph as pg
+from pyqtgraph import PlotWidget, InfiniteLine, LinearRegionItem
 
 
-class InteractivePlot(FigureCanvas):
-    """Interactive matplotlib plot with draggable boundaries"""
+class InteractivePlot(PlotWidget):
+    """Interactive PyQtGraph plot with draggable boundaries"""
     
     boundaries_changed = pyqtSignal(float, float)  # left_boundary, right_boundary
     
     def __init__(self, parent=None):
-        self.figure = Figure(figsize=(12, 6), facecolor='#2D2D30')
-        super().__init__(self.figure)
-        self.setParent(parent)
+        super().__init__(parent)
         
-        # Plot styling
-        plt.style.use('dark_background')
+        # Configure plot appearance
+        self.setBackground('#2D2D30')
+        self.showGrid(x=True, y=True, alpha=0.3)
         
-        self.ax = self.figure.add_subplot(111, facecolor='#1E1E1E')
-        self.ax.tick_params(colors='white', which='both')
-        self.ax.spines['bottom'].set_color('white')
-        self.ax.spines['top'].set_color('white')
-        self.ax.spines['left'].set_color('white')
-        self.ax.spines['right'].set_color('white')
+        # Set labels
+        self.setLabel('left', 'Intensity', color='white', size='12px')
+        self.setLabel('bottom', 'm/z', color='white', size='12px')
+        
+        # Configure view box
+        self.getViewBox().setMenuEnabled(False)  # Disable right-click menu
+        self.getViewBox().setMouseEnabled(x=True, y=True)  # Enable pan/zoom
         
         # Data
         self.mz_data = None
         self.intensity_data = None
         self.current_feature = None
         
-        # Interactive elements
-        self.left_line = None
-        self.right_line = None
-        self.peak_line = None
-        self.boundary_patch = None
-        self.dragging = None
-        
-        # Connect events
-        self.mpl_connect('button_press_event', self.on_press)
-        self.mpl_connect('button_release_event', self.on_release)
-        self.mpl_connect('motion_notify_event', self.on_motion)
-        
-        # Initial empty plot
+        # Plot items
+        self.spectrum_curve = None
+        self.target_line = None
+        self.matched_line = None
+        self.left_boundary = None
+        self.right_boundary = None
+        self.boundary_region = None
+          # Setup initial empty plot
         self.setup_empty_plot()
         
     def setup_empty_plot(self):
         """Setup an empty plot with styling"""
-        self.ax.clear()
-        self.ax.set_xlabel('m/z', color='white', fontsize=12)
-        self.ax.set_ylabel('Intensity', color='white', fontsize=12)
-        self.ax.set_title('Mass Spectrum - No Data Loaded', color='white', fontsize=14, fontweight='bold')
-        self.ax.grid(True, alpha=0.3, color='gray')
-        self.ax.text(0.5, 0.5, 'Load data to view spectrum', 
-                    transform=self.ax.transAxes, ha='center', va='center',
-                    fontsize=16, color='gray', style='italic')
-        self.draw()
+        self.clear()
+        self.setTitle('Mass Spectrum - No Data Loaded', color='white', size='14px')
+        
+        # Add instructional text
+        text_item = pg.TextItem('Load data to view spectrum', 
+                               color='gray', anchor=(0.5, 0.5))
+        text_item.setPos(0.5, 0.5)
+        self.addItem(text_item)
         
     def set_data(self, mz_data, intensity_data):
         """Set spectrum data"""
@@ -90,32 +81,18 @@ class InteractivePlot(FigureCanvas):
             self.setup_empty_plot()
             return
             
-        self.ax.clear()
+        self.clear()
         
-        # Plot main spectrum
-        self.ax.plot(self.mz_data, self.intensity_data, 'cyan', linewidth=1, alpha=0.8, label='Spectrum')
+        self.spectrum_curve = self.plot(self.mz_data, self.intensity_data, 
+                                      pen=pg.mkPen(color='cyan', width=1), 
+                                      name='Spectrum')
         
         # Plot current feature if available
         if self.current_feature is not None:
             self.plot_current_feature()
-            
-        # Styling
-        self.ax.set_xlabel('m/z', color='white', fontsize=12)
-        self.ax.set_ylabel('Intensity', color='white', fontsize=12)
-        self.ax.grid(True, alpha=0.3, color='gray')
-        self.ax.legend(loc='upper right')
-          # Set title with feature info
-        if self.current_feature is not None:
-            feature_name = self.current_feature.get('Name', 'Unknown')
-            target_mz = self.current_feature.get('m/z', 0)
-            self.ax.set_title(f'Feature: {feature_name} (m/z: {target_mz:.4f})', 
-                            color='white', fontsize=14, fontweight='bold')
         else:
-            self.ax.set_title('Mass Spectrum - Feature Deleted', 
-                            color='#E74C3C', fontsize=14, fontweight='bold')
+            self.setTitle('Mass Spectrum - Feature Deleted', color='#E74C3C', size='14px')
             
-        self.draw()
-        
     def plot_current_feature(self):
         """Plot the current feature with boundaries"""
         if self.current_feature is None:
@@ -126,115 +103,95 @@ class InteractivePlot(FigureCanvas):
         matched_mz = self.current_feature.get('matched_spectrum_mz')
         left_boundary = self.current_feature.get('left_boundary_mz')
         right_boundary = self.current_feature.get('right_boundary_mz')
+        feature_name = self.current_feature.get('Name', 'Unknown')
         
-        # Zoom to feature region
+        # Set title
+        self.setTitle(f'Feature: {feature_name} (m/z: {target_mz:.4f})', 
+                     color='white', size='14px')
+        
+        # Auto-zoom to feature region if matched_mz exists
         if matched_mz is not None and not np.isnan(matched_mz):
-            # Find zoom region around the feature
-            zoom_range = max(0.5, abs(right_boundary - left_boundary) * 3) if left_boundary and right_boundary else 2.0
+            # Calculate zoom range
+            if left_boundary and right_boundary:
+                zoom_range = max(0.5, abs(right_boundary - left_boundary) * 3)
+            else:
+                zoom_range = 2.0
+                
             zoom_min = matched_mz - zoom_range
             zoom_max = matched_mz + zoom_range
             
-            # Filter data to zoom region
+            # Set view range
+            self.setXRange(zoom_min, zoom_max, padding=0.1)
+            
+            # Find intensity range in the zoom region
             mask = (self.mz_data >= zoom_min) & (self.mz_data <= zoom_max)
             if np.any(mask):
-                zoom_mz = self.mz_data[mask]
-                zoom_intensity = self.intensity_data[mask]
-                
-                # Clear and replot zoomed region
-                self.ax.clear()
-                self.ax.plot(zoom_mz, zoom_intensity, 'cyan', linewidth=2, label='Spectrum')
-                
-                # Plot target m/z
-                max_intensity = np.max(zoom_intensity) if len(zoom_intensity) > 0 else 1
-                self.ax.axvline(target_mz, color='yellow', linestyle='--', linewidth=2, 
-                              alpha=0.8, label=f'Target m/z: {target_mz:.4f}')
-                
-                # Plot matched peak
-                if matched_mz is not None and not np.isnan(matched_mz):
-                    self.ax.axvline(matched_mz, color='lime', linestyle='-', linewidth=2,
-                                  alpha=0.8, label=f'Matched: {matched_mz:.4f}')
-                
-                # Plot boundaries
-                if left_boundary is not None and not np.isnan(left_boundary):
-                    self.left_line = self.ax.axvline(left_boundary, color='red', linestyle='-', 
-                                                   linewidth=3, alpha=0.8, label='Left Boundary',
-                                                   picker=True, pickradius=10)
-                    
-                if right_boundary is not None and not np.isnan(right_boundary):
-                    self.right_line = self.ax.axvline(right_boundary, color='red', linestyle='-', 
-                                                    linewidth=3, alpha=0.8, label='Right Boundary',
-                                                    picker=True, pickradius=10)
-                
-                # Add boundary region highlight
-                if left_boundary is not None and right_boundary is not None and \
-                   not np.isnan(left_boundary) and not np.isnan(right_boundary):
-                    self.boundary_patch = Rectangle((left_boundary, 0), 
-                                                  right_boundary - left_boundary, 
-                                                  max_intensity * 1.1,
-                                                  alpha=0.2, facecolor='red', 
-                                                  edgecolor='none')
-                    self.ax.add_patch(self.boundary_patch)
-                
-                # Set axis limits
-                self.ax.set_xlim(zoom_min, zoom_max)
-                self.ax.set_ylim(0, max_intensity * 1.1)
-                
-    def on_press(self, event):
-        """Handle mouse press events"""
-        if event.inaxes != self.ax:
-            return
+                max_intensity = np.max(self.intensity_data[mask])
+                self.setYRange(0, max_intensity * 1.1, padding=0.05)
+        
+        # Add target m/z line
+        if target_mz > 0:
+            self.target_line = InfiniteLine(pos=target_mz, angle=90, 
+                                          pen=pg.mkPen(color='yellow', width=2, style=Qt.PenStyle.DashLine),
+                                          label=f'Target: {target_mz:.4f}',
+                                          labelOpts={'position': 0.9, 'color': 'yellow'})
+            self.addItem(self.target_line)
+        
+        # Add matched peak line
+        if matched_mz is not None and not np.isnan(matched_mz):
+            self.matched_line = InfiniteLine(pos=matched_mz, angle=90,
+                                           pen=pg.mkPen(color='lime', width=2),
+                                           label=f'Matched: {matched_mz:.4f}',
+                                           labelOpts={'position': 0.8, 'color': 'lime'})
+            self.addItem(self.matched_line)
+        
+        # Add draggable boundary lines
+        if left_boundary is not None and not np.isnan(left_boundary):
+            self.left_boundary = InfiniteLine(pos=left_boundary, angle=90,
+                                            pen=pg.mkPen(color='red', width=3),
+                                            movable=True,
+                                            label='Left Boundary',
+                                            labelOpts={'position': 0.1, 'color': 'red'})
+            self.left_boundary.sigPositionChanged.connect(self.on_boundary_changed)
+            self.addItem(self.left_boundary)
             
-        # Check if clicking on boundary lines
-        if self.left_line and self.left_line.contains(event)[0]:
-            self.dragging = 'left'
-            self.setCursor(Qt.CursorShape.SizeHorCursor)
-        elif self.right_line and self.right_line.contains(event)[0]:
-            self.dragging = 'right'
-            self.setCursor(Qt.CursorShape.SizeHorCursor)
+        if right_boundary is not None and not np.isnan(right_boundary):
+            self.right_boundary = InfiniteLine(pos=right_boundary, angle=90,
+                                             pen=pg.mkPen(color='red', width=3),
+                                             movable=True,
+                                             label='Right Boundary',
+                                             labelOpts={'position': 0.1, 'color': 'red'})
+            self.right_boundary.sigPositionChanged.connect(self.on_boundary_changed)
+            self.addItem(self.right_boundary)
+        
+        # Add boundary region highlight
+        if (left_boundary is not None and right_boundary is not None and 
+            not np.isnan(left_boundary) and not np.isnan(right_boundary)):
+            self.boundary_region = LinearRegionItem([left_boundary, right_boundary],
+                                                   brush=pg.mkBrush(255, 0, 0, 50),
+                                                   movable=False)
+            self.boundary_region.setZValue(-10)  # Put behind other items
+            self.addItem(self.boundary_region)
+    
+    def on_boundary_changed(self):
+        """Handle boundary line position changes"""
+        if self.left_boundary and self.right_boundary:
+            left_pos = self.left_boundary.pos()[0]
+            right_pos = self.right_boundary.pos()[0]
             
-    def on_release(self, event):
-        """Handle mouse release events"""
-        if self.dragging:
-            self.dragging = None
-            self.setCursor(Qt.CursorShape.ArrowCursor)
+            # Update boundary region if it exists
+            if self.boundary_region:
+                self.boundary_region.setRegion([left_pos, right_pos])
             
-            # Emit boundary change signal
-            if self.left_line and self.right_line:
-                left_pos = self.left_line.get_xdata()[0]
-                right_pos = self.right_line.get_xdata()[0]
-                self.boundaries_changed.emit(left_pos, right_pos)
-                
-    def on_motion(self, event):
-        """Handle mouse motion events"""
-        if not self.dragging or event.inaxes != self.ax:
-            return
-            
-        if self.dragging == 'left' and self.left_line:
-            # Update left boundary
-            self.left_line.set_xdata([event.xdata, event.xdata])
-            if self.boundary_patch:
-                self.boundary_patch.set_x(event.xdata)
-                if self.right_line:
-                    right_pos = self.right_line.get_xdata()[0]
-                    self.boundary_patch.set_width(right_pos - event.xdata)
-            self.draw()
-            
-        elif self.dragging == 'right' and self.right_line:
-            # Update right boundary
-            self.right_line.set_xdata([event.xdata, event.xdata])
-            if self.boundary_patch and self.left_line:
-                left_pos = self.left_line.get_xdata()[0]
-                self.boundary_patch.set_width(event.xdata - left_pos)
-            self.draw()
-            
+            self.boundaries_changed.emit(left_pos, right_pos)
+
     def get_current_boundaries(self):
         """Get current boundary positions"""
-        if self.left_line and self.right_line:
-            left_pos = self.left_line.get_xdata()[0]
-            right_pos = self.right_line.get_xdata()[0]
+        if self.left_boundary and self.right_boundary:
+            left_pos = self.left_boundary.pos()[0]
+            right_pos = self.right_boundary.pos()[0]
             return left_pos, right_pos
         return None, None
-
 
 class SpectrumViewer(QWidget):
     """Main spectrum viewer widget with controls"""
@@ -314,7 +271,14 @@ class SpectrumViewer(QWidget):
         
         layout.addLayout(info_layout)
         
-        layout.addStretch()        # Delete button
+        # Add interaction instructions
+        instructions_label = QLabel("💡 Drag to pan • Scroll to zoom • Drag red lines to adjust boundaries")
+        instructions_label.setStyleSheet("color: #CCCCCC; font-size: 9px; font-style: italic;")
+        layout.addWidget(instructions_label)
+        
+        layout.addStretch()
+        
+        # Delete button
         self.delete_btn = QPushButton("🗑️ Delete")
         self.delete_btn.setFixedSize(100, 35)
         self.delete_btn.setStyleSheet(self.get_button_style("#E74C3C"))
