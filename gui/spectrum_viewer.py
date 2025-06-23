@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, 
-    QPushButton, QSlider, QSizePolicy
+    QPushButton, QSlider, QSizePolicy, QMessageBox
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 from PyQt6.QtGui import QFont, QKeySequence, QShortcut
@@ -226,10 +226,21 @@ class InteractivePlot(FigureCanvas):
                 left_pos = self.left_line.get_xdata()[0]
                 self.boundary_patch.set_width(event.xdata - left_pos)
             self.draw()
+            
+    def get_current_boundaries(self):
+        """Get current boundary positions"""
+        if self.left_line and self.right_line:
+            left_pos = self.left_line.get_xdata()[0]
+            right_pos = self.right_line.get_xdata()[0]
+            return left_pos, right_pos
+        return None, None
 
 
 class SpectrumViewer(QWidget):
     """Main spectrum viewer widget with controls"""
+    
+    # Add signal for ion image loading
+    load_ion_image_requested = pyqtSignal(float, float, str)  # min_mz, max_mz, region_id
     
     def __init__(self):
         super().__init__()
@@ -237,6 +248,8 @@ class SpectrumViewer(QWidget):
         self.spectrum_data = None
         self.current_index = 0
         self.deleted_features = set()  # Track deleted feature indices
+        self.session = None  # Store session for ion image loading
+        self.region_id = "Regions"  # Store region_id from initial parameters
         
         self.init_ui()
         self.setup_shortcuts()
@@ -301,8 +314,7 @@ class SpectrumViewer(QWidget):
         
         layout.addLayout(info_layout)
         
-        layout.addStretch()
-          # Delete button
+        layout.addStretch()        # Delete button
         self.delete_btn = QPushButton("🗑️ Delete")
         self.delete_btn.setFixedSize(100, 35)
         self.delete_btn.setStyleSheet(self.get_button_style("#E74C3C"))
@@ -310,16 +322,24 @@ class SpectrumViewer(QWidget):
         self.delete_btn.setToolTip("Delete this feature (Del key)")
         layout.addWidget(self.delete_btn)
         
+        # Load Ion Image button
+        self.load_image_btn = QPushButton("🖼️ Load Image")
+        self.load_image_btn.setFixedSize(100, 35)
+        self.load_image_btn.setStyleSheet(self.get_button_style("#9333EA"))
+        self.load_image_btn.clicked.connect(self.load_current_ion_image)
+        self.load_image_btn.setToolTip("Load ion image from current boundaries")
+        layout.addWidget(self.load_image_btn)
+        
         # Next button
         self.next_btn = QPushButton("Next ▶")
         self.next_btn.setFixedSize(100, 35)
         self.next_btn.setStyleSheet(self.get_button_style("#27AE60"))
         self.next_btn.clicked.connect(self.next_feature)
-        layout.addWidget(self.next_btn)
-          # Initially disable navigation and delete
+        layout.addWidget(self.next_btn)        # Initially disable navigation and delete
         self.prev_btn.setEnabled(False)
         self.next_btn.setEnabled(False)
         self.delete_btn.setEnabled(False)
+        self.load_image_btn.setEnabled(False)
         
         return control_widget
         
@@ -352,8 +372,7 @@ class SpectrumViewer(QWidget):
         return f"#{''.join(f'{c:02x}' for c in darkened)}"
         
     def setup_shortcuts(self):
-        """Setup keyboard shortcuts"""
-        # Arrow key navigation
+        """Setup keyboard shortcuts"""        # Arrow key navigation
         left_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Left), self)
         left_shortcut.activated.connect(self.previous_feature)
         
@@ -364,20 +383,51 @@ class SpectrumViewer(QWidget):
         delete_shortcut.activated.connect(self.delete_current_feature)
         
     def set_data(self, processed_df, spectrum_data):
-        """Set data for the viewer"""
-        self.processed_df = processed_df.copy()
+        """Set the processed data and spectrum data"""
+        self.processed_df = processed_df
         self.spectrum_data = spectrum_data
         self.current_index = 0
-        self.deleted_features = set()  # Reset deleted features for new data
+        self.deleted_features.clear()
         
-        # Enable navigation and delete if we have data
-        if len(self.processed_df) > 0:
-            self.prev_btn.setEnabled(True)
-            self.next_btn.setEnabled(True)
-            self.delete_btn.setEnabled(True)
+        if processed_df is not None and len(processed_df) > 0:
             self.update_display()
-        else:            self.counter_label.setText("No features found")
+            # Note: update_display() will handle the proper enable/disable state for all buttons
+        else:
+            # Clear display
+            self.counter_label.setText("No data loaded")
+            self.name_edit.clear()
+            self.plot.setup_empty_plot()
+            # Disable navigation buttons
+            self.prev_btn.setEnabled(False)
+            self.next_btn.setEnabled(False)
+            self.delete_btn.setEnabled(False)
+            self.load_image_btn.setEnabled(False)
+    
+    def set_session_and_region(self, session, region_id):
+        """Set the session and region_id for ion image loading"""
+        self.session = session
+        self.region_id = region_id
+    
+    def load_current_ion_image(self):
+        """Load ion image for current feature boundaries"""
+        if self.session is None:
+            QMessageBox.warning(self, "Warning", "No SCILSLab session available for ion image loading.")
+            return
             
+        # Get current boundaries from the plot
+        min_mz, max_mz = self.plot.get_current_boundaries()
+        
+        if min_mz is None or max_mz is None:
+            QMessageBox.warning(self, "Warning", "No valid boundaries found. Please ensure a feature is displayed with boundaries.")
+            return
+            
+        if min_mz >= max_mz:
+            QMessageBox.warning(self, "Warning", "Invalid boundary range. Left boundary must be less than right boundary.")
+            return
+            
+        # Emit signal to request ion image loading
+        self.load_ion_image_requested.emit(min_mz, max_mz, self.region_id)
+        
     def update_display(self):
         """Update the display with current feature"""
         if self.processed_df is None or len(self.processed_df) == 0:
@@ -407,11 +457,16 @@ class SpectrumViewer(QWidget):
             # Show empty plot for deleted features
             self.plot.set_data(self.spectrum_data['mz'], self.spectrum_data['intensities'])
             self.plot.set_current_feature(None)
-        
-        # Update button states
+          # Update button states
         self.prev_btn.setEnabled(self.current_index > 0)
         self.next_btn.setEnabled(self.current_index < total - 1)
         self.delete_btn.setEnabled(self.current_index not in self.deleted_features)
+        
+        # Enable load image button only if current feature is not deleted and has boundaries
+        has_boundaries = (self.current_index not in self.deleted_features and 
+                         not pd.isna(current_feature.get('left_boundary_mz')) and 
+                         not pd.isna(current_feature.get('right_boundary_mz')))
+        self.load_image_btn.setEnabled(has_boundaries and self.session is not None)
         
         # Update delete button text based on status
         if self.current_index in self.deleted_features:

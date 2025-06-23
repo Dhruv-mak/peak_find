@@ -21,6 +21,7 @@ from .spectrum_viewer import SpectrumViewer
 from .parameter_panel import ParameterPanel
 from .file_selector import FileSelector
 from .data_processor import DataProcessor
+from .ion_image_viewer import IonImageViewer
 
 
 class PeakFinderMainWindow(QMainWindow):
@@ -136,8 +137,7 @@ class PeakFinderMainWindow(QMainWindow):
                 background-color: #505050;
             }
         """)
-        
-        # File Selection Tab
+          # File Selection Tab
         self.file_selector = FileSelector()
         tab_widget.addTab(self.file_selector, "📁 Files")
         
@@ -148,6 +148,10 @@ class PeakFinderMainWindow(QMainWindow):
         # Processing Tab
         processing_tab = self.create_processing_tab()
         tab_widget.addTab(processing_tab, "🔬 Processing")
+        
+        # Ion Image Viewer Tab
+        self.ion_image_viewer = IonImageViewer()
+        tab_widget.addTab(self.ion_image_viewer, "🖼️ Ion Images")
         
         control_layout.addWidget(tab_widget)
         
@@ -266,8 +270,7 @@ class PeakFinderMainWindow(QMainWindow):
         """Create the spectrum visualization panel"""
         panel = QWidget()
         layout = QVBoxLayout(panel)
-        
-        # Spectrum viewer
+          # Spectrum viewer
         self.spectrum_viewer = SpectrumViewer()
         layout.addWidget(self.spectrum_viewer)
         
@@ -278,6 +281,8 @@ class PeakFinderMainWindow(QMainWindow):
         self.process_btn.clicked.connect(self.process_data)
         self.export_btn.clicked.connect(self.export_to_scilslab)
         self.file_selector.files_selected.connect(self.on_files_selected)
+          # Connect spectrum viewer ion image request to ion image viewer
+        self.spectrum_viewer.load_ion_image_requested.connect(self.load_ion_image_from_boundaries)
         
     def on_files_selected(self, slx_file, csv_file):
         """Handle file selection"""
@@ -301,12 +306,13 @@ class PeakFinderMainWindow(QMainWindow):
         if not os.path.exists(csv_file):
             QMessageBox.critical(self, "Error", f"CSV file not found: {csv_file}")
             return
-        
+            
         # Start processing in a separate thread
         self.progress_bar.setVisible(True)
         self.progress_bar.setRange(0, 0)  # Indeterminate progress
         self.process_btn.setEnabled(False)
-          # Create processor thread
+        
+        # Create processor thread
         file_params = {
             'delimiter': self.file_selector.get_delimiter(),
             'skip_rows': self.file_selector.get_skip_rows(),
@@ -329,10 +335,11 @@ class PeakFinderMainWindow(QMainWindow):
         
         self.log_message("Starting data processing...")
         
-    def on_processing_complete(self, processed_df, spectrum_data):
+    def on_processing_complete(self, processed_df, spectrum_data, session):
         """Handle processing completion"""
         self.processed_df = processed_df
         self.current_spectrum_data = spectrum_data
+        self.session = session  # Store the session for ion image viewing
         
         self.progress_bar.setVisible(False)
         self.process_btn.setEnabled(True)
@@ -340,6 +347,12 @@ class PeakFinderMainWindow(QMainWindow):
         
         # Update spectrum viewer
         self.spectrum_viewer.set_data(processed_df, spectrum_data)
+        
+        # Pass session and region_id to spectrum viewer for ion image loading
+        region_id = self.file_selector.get_region_id()
+        self.spectrum_viewer.set_session_and_region(session, region_id)
+          # Update ion image viewer with session
+        self.ion_image_viewer.set_session(session)
         
         # Show results summary
         matched_count = processed_df["matched_spectrum_mz"].notna().sum()
@@ -366,6 +379,21 @@ class PeakFinderMainWindow(QMainWindow):
         
         self.log_message(f"Error: {error_message}")
         QMessageBox.critical(self, "Processing Error", error_message)
+        
+    def load_ion_image_from_boundaries(self, min_mz, max_mz, region_id):
+        """Handle ion image loading request from spectrum viewer"""
+        # Find and switch to Ion Images tab
+        tab_widget = self.findChild(QTabWidget)
+        if tab_widget:
+            for i in range(tab_widget.count()):
+                if "Ion Images" in tab_widget.tabText(i):
+                    tab_widget.setCurrentIndex(i)
+                    break
+        
+        # Set the m/z values in the ion image viewer and trigger loading
+        self.ion_image_viewer.set_mz_range_and_load(min_mz, max_mz, region_id)
+        
+        self.log_message(f"Loading ion image for m/z range {min_mz:.4f} - {max_mz:.4f}")
         
     def export_to_scilslab(self):
         """Export results to SCILSLab"""
@@ -494,3 +522,15 @@ class PeakFinderMainWindow(QMainWindow):
                 transform: rotate(45deg);
             }
         """)
+        
+    def closeEvent(self, event):
+        """Handle application close event"""
+        # Clean up the session if it exists
+        if hasattr(self, 'session') and self.session:
+            try:
+                self.session.close()
+                self.log_message("SCILSLab session closed.")
+            except Exception as e:
+                print(f"Error closing session: {e}")
+        
+        event.accept()

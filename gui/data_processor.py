@@ -24,7 +24,7 @@ class DataProcessor(QThread):
     """Thread for processing data without blocking the GUI"""
     
     progress_update = pyqtSignal(str)
-    processing_complete = pyqtSignal(pd.DataFrame, dict)
+    processing_complete = pyqtSignal(pd.DataFrame, dict, object)  # Added session object
     processing_error = pyqtSignal(str)
     
     def __init__(self, slx_file, csv_file, parameters, file_params=None):
@@ -83,19 +83,15 @@ class DataProcessor(QThread):
                 right_ppm=self.parameters.get('right_ppm', 50.0),
                 min_intensity_ratio=self.parameters.get('min_intensity_ratio', 0.01)
             )
-            
-            # Prepare spectrum data for the viewer
+              # Prepare spectrum data for the viewer
             spectrum_data = {
                 'mz': mz,
                 'intensities': intensities
             }
             
-            # Close session
-            if self.session:
-                self.session.close()
-                self.session = None
-            
-            self.processing_complete.emit(processed_df, spectrum_data)
+            # Keep session alive and pass it to main window for ion image viewing
+            # Note: The main window will be responsible for closing the session
+            self.processing_complete.emit(processed_df, spectrum_data, self.session)
             
         except Exception as e:
             error_message = f"Processing failed: {str(e)}"
