@@ -22,7 +22,7 @@ class IonImageProcessor(QThread):
     """Thread for processing ion images without blocking the GUI"""
     
     progress_update = pyqtSignal(str)
-    image_ready = pyqtSignal(list, float, float, str)  # ion_images, min_mz, max_mz, region_id
+    image_ready = pyqtSignal(list, float, float, str)
     processing_error = pyqtSignal(str)
     
     def __init__(self, session, min_mz, max_mz, region_id="Regions"):

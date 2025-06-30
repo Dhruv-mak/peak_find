@@ -1,0 +1,174 @@
+name: Build Executable and Installer
+on:
+  workflow_dispatch:  # Manual trigger for testing
+    inputs:
+      debug_mode:
+        description: 'Enable debug mode (shows more detailed output)'
+        required: false
+        default: 'true'
+        type: boolean
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  release:
+    types: [created]
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure Git Credentials
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install Dependencies
+        run: uv sync --locked --all-extras --dev
+
+      - name: Show Python and package info (debug)
+        if: ${{ inputs.debug_mode == true || inputs.debug_mode == '' }}
+        run: |
+          echo "=== Python Environment Info ==="
+          uv run python --version
+          echo "=== UV Info ==="
+          uv --version
+          echo "=== Installed packages ==="
+          uv run pip list
+          echo "=== Current directory ==="
+          pwd
+          dir
+
+      - name: Create config file
+        run: |
+          echo '{"globus": {"src_collection_id": "", "client_secret": "", "enabled": false}}' > config.json
+
+      - name: Build executable with PyInstaller
+        run: |
+          echo "=== Starting PyInstaller build ==="
+          uv run pyinstaller gui_main.spec --clean --noconfirm
+          echo "=== PyInstaller build completed ==="
+        
+      - name: List dist contents (debug)
+        run: |
+          echo "=== Contents of dist directory ==="
+          if (Test-Path "dist") {
+            dir dist /s
+          } else {
+            echo "❌ dist directory not found"
+          }
+          echo "=== Contents of build directory ==="
+          if (Test-Path "build") {
+            dir build /s
+          } else {
+            echo "build directory not found"
+          }
+          echo "=== Contents of current directory ==="
+          dir
+          
+      - name: Test executable
+        run: |
+          echo "=== Testing if executable was created ==="
+          if (Test-Path "dist\PeakFinderPro\PeakFinderPro.exe") {
+            echo "✅ Executable created successfully"
+            $fileInfo = Get-Item 'dist\PeakFinderPro\PeakFinderPro.exe'
+            echo "File size: $($fileInfo.Length) bytes ($([math]::Round($fileInfo.Length / 1MB, 2)) MB)"
+            echo "Created: $($fileInfo.CreationTime)"
+            echo "=== Contents of PeakFinderPro directory ==="
+            dir "dist\PeakFinderPro" | Format-Table Name, Length, LastWriteTime
+          } else {
+            echo "❌ Executable not found"
+            echo "=== Looking for any .exe files ==="
+            Get-ChildItem -Recurse -Filter "*.exe" | ForEach-Object { echo $_.FullName }
+            exit 1
+          }
+
+      - name: Create portable ZIP
+        run: |
+          echo "=== Creating portable ZIP ==="
+          if (Test-Path "dist\PeakFinderPro") {
+            Compress-Archive -Path "dist\PeakFinderPro\*" -DestinationPath "PeakFinderPro-Portable.zip"
+            echo "✅ ZIP created successfully"
+            $zipInfo = Get-Item "PeakFinderPro-Portable.zip"
+            echo "ZIP size: $($zipInfo.Length) bytes ($([math]::Round($zipInfo.Length / 1MB, 2)) MB)"
+          } else {
+            echo "❌ Source directory not found for ZIP creation"
+            exit 1
+          }
+
+      - name: Compile Inno Setup Installer
+        run: |
+          echo "=== Starting Inno Setup compilation ==="
+          echo "Checking if setup.iss exists..."
+          if (Test-Path "setup.iss") {
+            echo "✅ setup.iss found"
+            Get-Content "setup.iss" | Select-Object -First 10
+          } else {
+            echo "❌ setup.iss not found"
+            exit 1
+          }
+        continue-on-error: true
+
+      - name: Run Inno Setup Action
+        uses: Minionguyjpro/Inno-Setup-Action@v1.2.2
+        with:
+          path: setup.iss
+          options: /O+ /Qp
+        continue-on-error: true
+
+      - name: List installer output (debug)
+        run: |
+          echo "=== Checking for installer output ==="
+          echo "Contents of installer directory:"
+          if (Test-Path "installer") {
+            dir installer
+            echo "=== Installer files found ==="
+            Get-ChildItem "installer" -Filter "*.exe" | ForEach-Object { 
+              echo "Installer: $($_.Name) - Size: $($_.Length) bytes"
+            }
+          } else {
+            echo "Installer directory not found, checking current directory:"
+            dir *.exe
+            echo "=== All directories ==="
+            Get-ChildItem -Directory | ForEach-Object { echo "Directory: $($_.Name)" }
+          }
+
+      - name: Upload Portable ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: PeakFinderPro-Portable
+          path: PeakFinderPro-Portable.zip
+          retention-days: 30
+
+      - name: Upload Installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: PeakFinderPro-Installer
+          path: |
+            installer/*.exe
+            *.exe
+          retention-days: 30
+
+      - name: Upload Release Assets
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            PeakFinderPro-Portable.zip
+            installer/*.exe
+            *.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
