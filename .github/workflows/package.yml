@@ -66,18 +66,29 @@ jobs:
         run: |
           echo "=== Contents of dist directory ==="
           if (Test-Path "dist") {
-            dir dist /s
+            Get-ChildItem -Recurse "dist" | ForEach-Object { 
+              $relativePath = $_.FullName.Replace((Get-Location).Path + "\", "")
+              if ($_.PSIsContainer) {
+                echo "DIR:  $relativePath"
+              } else {
+                $size = if ($_.Length -gt 1MB) { "$([math]::Round($_.Length / 1MB, 2)) MB" } else { "$($_.Length) bytes" }
+                echo "FILE: $relativePath ($size)"
+              }
+            }
           } else {
             echo "❌ dist directory not found"
           }
           echo "=== Contents of build directory ==="
           if (Test-Path "build") {
-            dir build /s
+            Get-ChildItem -Recurse "build" | Select-Object -First 20 | ForEach-Object {
+              $relativePath = $_.FullName.Replace((Get-Location).Path + "\", "")
+              echo "BUILD: $relativePath"
+            }
           } else {
             echo "build directory not found"
           }
           echo "=== Contents of current directory ==="
-          dir
+          Get-ChildItem | ForEach-Object { echo $_.Name }
           
       - name: Test executable
         run: |
@@ -134,14 +145,14 @@ jobs:
           echo "=== Checking for installer output ==="
           echo "Contents of installer directory:"
           if (Test-Path "installer") {
-            dir installer
+            Get-ChildItem "installer" | ForEach-Object { echo "  $($_.Name) - $($_.Length) bytes" }
             echo "=== Installer files found ==="
             Get-ChildItem "installer" -Filter "*.exe" | ForEach-Object { 
               echo "Installer: $($_.Name) - Size: $($_.Length) bytes"
             }
           } else {
             echo "Installer directory not found, checking current directory:"
-            dir *.exe
+            Get-ChildItem -Filter "*.exe" | ForEach-Object { echo "  $($_.Name)" }
             echo "=== All directories ==="
             Get-ChildItem -Directory | ForEach-Object { echo "Directory: $($_.Name)" }
           }
