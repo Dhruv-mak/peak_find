@@ -1,30 +1,41 @@
-name: Build Executable and Installer
+name: Build Executable and Installer on Release
 on:
-  workflow_dispatch:  # Manual trigger for testing
+  release:
+    types: [created]
+  workflow_dispatch:  # Keep manual trigger for testing
     inputs:
       debug_mode:
         description: 'Enable debug mode (shows more detailed output)'
         required: false
-        default: 'true'
+        default: 'false'
         type: boolean
-  push:
-    branches:
-      - main
-  pull_request:
-    branches:
-      - main
-  release:
-    types: [created]
 
 permissions:
   contents: write
 
 jobs:
   build-windows:
+    name: Build Windows Executable and Installer
     runs-on: windows-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Get release version
+        id: get_version
+        run: |
+          if ("${{ github.event_name }}" -eq "release") {
+            $version = "${{ github.event.release.tag_name }}" -replace '^v', ''
+            echo "version=$version" >> $env:GITHUB_OUTPUT
+            echo "release_name=${{ github.event.release.name }}" >> $env:GITHUB_OUTPUT
+            echo "is_release=true" >> $env:GITHUB_OUTPUT
+          } else {
+            $version = "dev-$(Get-Date -Format 'yyyyMMdd-HHmm')"
+            echo "version=$version" >> $env:GITHUB_OUTPUT
+            echo "release_name=Development Build" >> $env:GITHUB_OUTPUT
+            echo "is_release=false" >> $env:GITHUB_OUTPUT
+          }
+          echo "Using version: $version"
 
       - name: Configure Git Credentials
         run: |
@@ -55,6 +66,17 @@ jobs:
       - name: Create config file
         run: |
           echo '{"globus": {"src_collection_id": "", "client_secret": "", "enabled": false}}' > config.json
+
+      - name: Update Inno Setup script with version
+        run: |
+          $version = "${{ steps.get_version.outputs.version }}"
+          $content = Get-Content "setup.iss" -Raw
+          $content = $content -replace 'AppVersion=.*', "AppVersion=$version"
+          $content = $content -replace 'OutputBaseFilename=.*', "OutputBaseFilename=PeakFinderPro-Setup-v$version"
+          Set-Content "setup.iss" $content
+          echo "Updated setup.iss with version: $version"
+          echo "=== First 15 lines of setup.iss ==="
+          Get-Content "setup.iss" | Select-Object -First 15
 
       - name: Build executable with PyInstaller
         run: |
@@ -111,10 +133,13 @@ jobs:
         run: |
           echo "=== Creating portable ZIP ==="
           if (Test-Path "dist\PeakFinderPro") {
-            Compress-Archive -Path "dist\PeakFinderPro\*" -DestinationPath "PeakFinderPro-Portable.zip"
-            echo "✅ ZIP created successfully"
-            $zipInfo = Get-Item "PeakFinderPro-Portable.zip"
+            $version = "${{ steps.get_version.outputs.version }}"
+            $zipName = "PeakFinderPro-Portable-v$version.zip"
+            Compress-Archive -Path "dist\PeakFinderPro\*" -DestinationPath $zipName
+            echo "✅ ZIP created successfully: $zipName"
+            $zipInfo = Get-Item $zipName
             echo "ZIP size: $($zipInfo.Length) bytes ($([math]::Round($zipInfo.Length / 1MB, 2)) MB)"
+            echo "zip_name=$zipName" >> $env:GITHUB_OUTPUT
           } else {
             echo "❌ Source directory not found for ZIP creation"
             exit 1
@@ -134,11 +159,31 @@ jobs:
         continue-on-error: true
 
       - name: Run Inno Setup Action
+        id: inno_setup
         uses: Minionguyjpro/Inno-Setup-Action@v1.2.2
         with:
           path: setup.iss
           options: /O+ /Qp
-        continue-on-error: true
+
+      - name: Find installer file
+        id: find_installer
+        run: |
+          echo "=== Finding installer file ==="
+          $installerFile = $null
+          if (Test-Path "installer") {
+            $installerFile = Get-ChildItem "installer" -Filter "*.exe" | Select-Object -First 1
+          }
+          if (-not $installerFile) {
+            $installerFile = Get-ChildItem -Filter "PeakFinderPro-Setup*.exe" | Select-Object -First 1
+          }
+          if ($installerFile) {
+            echo "Found installer: $($installerFile.FullName)"
+            echo "installer_path=$($installerFile.FullName)" >> $env:GITHUB_OUTPUT
+            echo "installer_name=$($installerFile.Name)" >> $env:GITHUB_OUTPUT
+          } else {
+            echo "❌ No installer file found"
+            exit 1
+          }
 
       - name: List installer output (debug)
         run: |
@@ -160,26 +205,23 @@ jobs:
       - name: Upload Portable ZIP
         uses: actions/upload-artifact@v4
         with:
-          name: PeakFinderPro-Portable
-          path: PeakFinderPro-Portable.zip
-          retention-days: 30
+          name: PeakFinderPro-Portable-${{ steps.get_version.outputs.version }}
+          path: PeakFinderPro-Portable-v${{ steps.get_version.outputs.version }}.zip
+          retention-days: 90
 
       - name: Upload Installer
         uses: actions/upload-artifact@v4
         with:
-          name: PeakFinderPro-Installer
-          path: |
-            installer/*.exe
-            *.exe
-          retention-days: 30
+          name: PeakFinderPro-Installer-${{ steps.get_version.outputs.version }}
+          path: ${{ steps.find_installer.outputs.installer_path }}
+          retention-days: 90
 
       - name: Upload Release Assets
-        if: github.event_name == 'release'
-        uses: softprops/action-gh-release@v1
+        if: steps.get_version.outputs.is_release == 'true'
+        uses: softprops/action-gh-release@v2
         with:
           files: |
-            PeakFinderPro-Portable.zip
-            installer/*.exe
-            *.exe
+            PeakFinderPro-Portable-v${{ steps.get_version.outputs.version }}.zip
+            ${{ steps.find_installer.outputs.installer_path }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
