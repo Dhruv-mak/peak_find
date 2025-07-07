@@ -91,9 +91,6 @@ class TrainingDataUploader(QThread):
             except Exception as upload_error:
                 self.progress_update.emit(f"⚠️ Upload error: {str(upload_error)}")
             
-            # Always clean up temporary files
-            self._cleanup_temp_files()
-            
             # Report results
             if csv_task_id and spectrum_task_id:
                 success_msg = f"🎯 Training data upload initiated successfully!\n   CSV Task ID: {csv_task_id}\n   Spectrum Task ID: {spectrum_task_id}"
@@ -281,11 +278,6 @@ class TrainingDataUploader(QThread):
             self.progress_update.emit(f"   Source: {globus_src_path}")
             self.progress_update.emit(f"   Destination: {globus_dest_path}")
             self.progress_update.emit(f"   Label: {label}")
-            
-            if tc.task_wait(task_id, timeout=120):
-                self.progress_update.emit("🎉 Transfer completed successfully!")
-            else:
-                self.progress_update.emit("⚠️ Transfer did not complete within the timeout period.")
             
             return task_id
             

@@ -20,12 +20,23 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt6.QtGui import QFont, QIcon, QPalette, QColor
 
-from globus_sdk import (
-    ConfidentialAppAuthClient, 
-    TransferClient, 
-    TransferData, 
-    AccessTokenAuthorizer
-)
+# Safe import for globus_sdk to handle PyInstaller .pyi file issues
+try:
+    from globus_sdk import (
+        ConfidentialAppAuthClient, 
+        TransferClient, 
+        TransferData, 
+        AccessTokenAuthorizer
+    )
+    GLOBUS_AVAILABLE = True
+except (ImportError, FileNotFoundError) as e:
+    print(f"Warning: Globus SDK not fully available: {e}")
+    # Create mock classes for when globus is not available
+    class ConfidentialAppAuthClient: pass
+    class TransferClient: pass
+    class TransferData: pass
+    class AccessTokenAuthorizer: pass
+    GLOBUS_AVAILABLE = False
 
 from .spectrum_viewer import SpectrumViewer
 from .parameter_panel import ParameterPanel
@@ -153,7 +164,9 @@ class PeakFinderMainWindow(QMainWindow):
         self.setGeometry(100, 100, 1600, 1000)
         
         # Set window icon (if available)
-        # self.setWindowIcon(QIcon("icon.png"))
+        icon_path = Path(__file__).parent.parent / "icon.ico"
+        if icon_path.exists():
+            self.setWindowIcon(QIcon(str(icon_path)))
         
         # Create central widget
         central_widget = QWidget()
@@ -799,6 +812,11 @@ class PeakFinderMainWindow(QMainWindow):
         --------
         str : Task ID of the transfer, or None if failed
         """
+        # Check if Globus SDK is available
+        if not GLOBUS_AVAILABLE:
+            self.log_message("❌ Globus SDK not available. Please install globus-sdk package.")
+            return None
+            
         # Hardcoded destination collection and client ID
         DST_COLL = "df2e72a2-fe59-46a8-bb32-8ec55fc6d179"
         CLIENT_ID = "c75bb7e7-6db4-4efc-82f9-b750f98c2d80"
@@ -885,11 +903,6 @@ class PeakFinderMainWindow(QMainWindow):
             self.log_message(f"   Source: {globus_src_path}")
             self.log_message(f"   Destination: {globus_dest_path}")
             self.log_message(f"   Label: {label}")
-            
-            if tc.task_wait(task_id, timeout=120):
-                self.log_message("🎉 Transfer completed successfully!")
-            else:
-                self.log_message("⚠️ Transfer did not complete within the timeout period.")
             
             return task_id
             
