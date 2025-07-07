@@ -42,6 +42,27 @@ class InteractivePlot(PlotWidget):
         self.getViewBox().setMenuEnabled(False)  # Disable right-click menu
         self.getViewBox().setMouseEnabled(x=True, y=True)  # Enable pan/zoom
         
+        # Disable right-click axis scaling but keep scroll zoom
+        # We'll override the mouse event handling in the plot item to prevent axis scaling
+        plot_item = self.getPlotItem()
+        
+        # Store original mouse event handler
+        self._original_mouse_click_event = plot_item.mousePressEvent
+        
+        # Override mouse press event to prevent axis right-click menus
+        def custom_mouse_press_event(event):
+            # Only allow left mouse button interactions
+            if event.button() == Qt.MouseButton.LeftButton:
+                self._original_mouse_click_event(event)
+            # Ignore right-click and middle-click on axes
+            else:
+                event.ignore()
+        
+        plot_item.mousePressEvent = custom_mouse_press_event
+        
+        # Connect to view range changes for auto-scaling
+        self.getViewBox().sigRangeChanged.connect(self.on_view_range_changed)
+        
         # Data
         self.mz_data = None
         self.intensity_data = None
@@ -204,6 +225,33 @@ class InteractivePlot(PlotWidget):
                 self.boundary_region.setRegion([left_pos, right_pos])
             
             self.boundaries_changed.emit(left_pos, right_pos)
+
+    def on_view_range_changed(self, viewbox, ranges):
+        """Auto-adjust Y-axis based on visible X-range when zooming/panning"""
+        if self.mz_data is None or self.intensity_data is None or len(self.mz_data) == 0:
+            return
+            
+        # Get current X range
+        x_range = ranges[0]
+        x_min, x_max = x_range
+        
+        # Find data points within the visible X range
+        mask = (self.mz_data >= x_min) & (self.mz_data <= x_max)
+        
+        if np.any(mask):
+            # Get intensity range for visible data
+            visible_intensities = self.intensity_data[mask]
+            y_min = 0  # Always start Y-axis at 0 for mass spectra
+            y_max = np.max(visible_intensities)
+            
+            # Add some padding to the top
+            y_padding = y_max * 0.1
+            y_max += y_padding
+            
+            # Set Y range without triggering another range change event
+            self.getViewBox().blockSignals(True)
+            self.setYRange(y_min, y_max, padding=0)
+            self.getViewBox().blockSignals(False)
 
     def get_current_boundaries(self):
         """Get current boundary positions"""
