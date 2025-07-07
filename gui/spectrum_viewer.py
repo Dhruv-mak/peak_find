@@ -7,12 +7,16 @@ and navigation between features using PyQtGraph for smooth, natural interactions
 
 import numpy as np
 import pandas as pd
+import warnings
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, 
     QPushButton, QSlider, QSizePolicy, QMessageBox
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 from PyQt6.QtGui import QFont, QKeySequence, QShortcut, QColor
+
+# Suppress PyQtGraph overflow warnings that don't affect functionality
+warnings.filterwarnings("ignore", category=RuntimeWarning, module="pyqtgraph")
 
 import pyqtgraph as pg
 from pyqtgraph import PlotWidget, InfiniteLine, LinearRegionItem
@@ -65,9 +69,25 @@ class InteractivePlot(PlotWidget):
         self.addItem(text_item)
         
     def set_data(self, mz_data, intensity_data):
-        """Set spectrum data"""
-        self.mz_data = np.array(mz_data)
-        self.intensity_data = np.array(intensity_data)
+        """Set spectrum data with validation to prevent overflow"""
+        # Convert to numpy arrays and validate
+        mz_array = np.array(mz_data, dtype=np.float64)
+        intensity_array = np.array(intensity_data, dtype=np.float64)
+        
+        # Remove infinite and NaN values
+        valid_mask = np.isfinite(mz_array) & np.isfinite(intensity_array)
+        
+        if not np.any(valid_mask):
+            print("Warning: All spectrum data points are invalid (NaN or infinite)")
+            self.mz_data = np.array([])
+            self.intensity_data = np.array([])
+        else:
+            self.mz_data = mz_array[valid_mask]
+            self.intensity_data = intensity_array[valid_mask]
+            
+            # Clip extreme values to prevent overflow
+            self.intensity_data = np.clip(self.intensity_data, 0, 1e12)
+            
         self.update_plot()
         
     def set_current_feature(self, feature_data):
@@ -205,7 +225,7 @@ class SpectrumViewer(QWidget):
         self.spectrum_data = None
         self.current_index = 0
         self.deleted_features = set()  # Track deleted feature indices
-        self.session = None  # Store session for ion image loading
+        self.slx_file_path = None  # Store SLX file path for on-demand session creation
         self.region_id = "Regions"  # Store region_id from initial parameters
         
         self.init_ui()
@@ -367,15 +387,17 @@ class SpectrumViewer(QWidget):
             self.delete_btn.setEnabled(False)
             self.load_image_btn.setEnabled(False)
     
-    def set_session_and_region(self, session, region_id):
-        """Set the session and region_id for ion image loading"""
-        self.session = session
+    def set_slx_file_and_region(self, slx_file_path, region_id):
+        """Set the SLX file path and region_id for ion image loading"""
+        self.slx_file_path = slx_file_path
         self.region_id = region_id
+        # Update display to refresh button states
+        self.update_display()
     
     def load_current_ion_image(self):
         """Load ion image for current feature boundaries"""
-        if self.session is None:
-            QMessageBox.warning(self, "Warning", "No SCILSLab session available for ion image loading.")
+        if not hasattr(self, 'slx_file_path') or not self.slx_file_path:
+            QMessageBox.warning(self, "Warning", "No SLX file available for ion image loading.")
             return
             
         # Get current boundaries from the plot
@@ -430,7 +452,9 @@ class SpectrumViewer(QWidget):
         has_boundaries = (self.current_index not in self.deleted_features and 
                          not pd.isna(current_feature.get('left_boundary_mz')) and 
                          not pd.isna(current_feature.get('right_boundary_mz')))
-        self.load_image_btn.setEnabled(has_boundaries and self.session is not None)
+        has_slx_file = bool(getattr(self, 'slx_file_path', None))
+            
+        self.load_image_btn.setEnabled(has_boundaries and has_slx_file)
         
         # Update delete button text based on status
         if self.current_index in self.deleted_features:

@@ -10,10 +10,16 @@ Date: June 17, 2025
 
 import sys
 import os
+import warnings
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont, QPalette, QColor
 from gui.main_window import PeakFinderMainWindow
+
+# Suppress Qt and PyQtGraph warnings that don't affect functionality
+warnings.filterwarnings("ignore", category=RuntimeWarning, module="pyqtgraph")
+warnings.filterwarnings("ignore", message="Unknown property.*")
+warnings.filterwarnings("ignore", message=".*setProcessDpiAwarenessContext.*")
 
 
 def set_dark_theme(app):

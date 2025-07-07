@@ -266,9 +266,10 @@ def create_spectrum_plot(mz, intensities, output_path=None):
 def create_feature_list(session, feature_list_name, processed_df):
     dataset = session.dataset_proxy
 
-    print(
-        f"features with same left and right {len(processed_df[processed_df['left_boundary_mz'] == processed_df['right_boundary_mz']])}"
-    )
+    # Check for features with identical boundaries and fix them
+    same_boundaries_count = len(processed_df[processed_df['left_boundary_mz'] == processed_df['right_boundary_mz']])
+    if same_boundaries_count > 0:
+        print(f"Info: Found {same_boundaries_count} features with identical left and right boundaries - fixing automatically")
 
     # For features with same left and right boundaries, set to mz ± 30 ppm
     same_boundaries_mask = processed_df['left_boundary_mz'] == processed_df['right_boundary_mz']

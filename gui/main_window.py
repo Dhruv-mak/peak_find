@@ -32,6 +32,7 @@ from .parameter_panel import ParameterPanel
 from .file_selector import FileSelector
 from .data_processor import DataProcessor
 from .ion_image_viewer import IonImageViewer
+from .training_data_uploader import TrainingDataUploader
 
 
 class PeakFinderMainWindow(QMainWindow):
@@ -310,7 +311,7 @@ class PeakFinderMainWindow(QMainWindow):
                 height: 6px;
                 border-top: none;
                 border-left: none;
-                transform: rotate(45deg);
+                /* transform: rotate(45deg); */
             }
             QComboBox QAbstractItemView {
                 background-color: #3C3C3C;
@@ -556,20 +557,31 @@ class PeakFinderMainWindow(QMainWindow):
         """Handle processing completion"""
         self.processed_df = processed_df
         self.current_spectrum_data = spectrum_data
-        self.session = session  # Store the session for ion image viewing
         
+        # Store SLX file path instead of keeping session open
+        self.slx_file_path = self.file_selector.get_slx_file()
+        
+        # Close the processing session to free up the file
+        if session:
+            try:
+                session.close()
+                self.log_message("Processing session closed successfully")
+            except Exception as e:
+                self.log_message(f"Warning: Error closing processing session: {e}")
+
         self.progress_bar.setVisible(False)
         self.process_btn.setEnabled(True)
         self.export_btn.setEnabled(True)
-        
+
         # Update spectrum viewer
         self.spectrum_viewer.set_data(processed_df, spectrum_data)
-        
-        # Pass session and region_id to spectrum viewer for ion image loading
+
+        # Pass SLX file path and region_id to spectrum viewer for on-demand session creation
         region_id = self.file_selector.get_region_id()
-        self.spectrum_viewer.set_session_and_region(session, region_id)
-          # Update ion image viewer with session
-        self.ion_image_viewer.set_session(session)
+        self.spectrum_viewer.set_slx_file_and_region(self.slx_file_path, region_id)
+        
+        # Update ion image viewer with SLX file path for on-demand session creation
+        self.ion_image_viewer.set_slx_file(self.slx_file_path)
         
         # Show results summary
         matched_count = processed_df["matched_spectrum_mz"].notna().sum()
@@ -580,9 +592,6 @@ class PeakFinderMainWindow(QMainWindow):
         self.log_message(f"Total features: {total_count}")
         self.log_message(f"Matched features: {matched_count}")
         self.log_message(f"Match rate: {match_rate:.1f}%")
-        
-        # Prepare training data if requested
-        self.prepare_training_data()
         
         QMessageBox.information(
             self, 
@@ -657,16 +666,23 @@ class PeakFinderMainWindow(QMainWindow):
             from peak_matcher import create_feature_list
             from scilslab import LocalSession
             
-            slx_file = self.file_selector.get_slx_file()
+            # Use the stored SLX file path
+            slx_file = self.slx_file_path if hasattr(self, 'slx_file_path') else self.file_selector.get_slx_file()
             
-            # Create temporary session for export
-            self.log_message("Creating SCILSLab session for export...")
-            session = LocalSession(filename=slx_file)
+            # Create a fresh session for export
+            self.log_message("Creating fresh SCILSLab session for export...")
+            export_session = None
             
             try:
-                create_feature_list(session, feature_list_name, active_df)
+                export_session = LocalSession(filename=slx_file)
+                
+                create_feature_list(export_session, feature_list_name, active_df)
                 self.log_message(f"Feature list '{feature_list_name}' created successfully!")
                 self.log_message(f"Exported {active_count} active features (excluded {deleted_count} deleted features)")
+                
+                # Prepare training data with the final, corrected annotations
+                self.prepare_training_data(active_df)
+                
                 QMessageBox.information(
                     self, 
                     "Export Complete", 
@@ -674,9 +690,15 @@ class PeakFinderMainWindow(QMainWindow):
                     f"Exported {active_count} active features.\n"
                     f"Excluded {deleted_count} deleted features."
                 )
+                
             finally:
-                session.close()
-                self.log_message("SCILSLab session closed.")
+                # Always close the export session
+                if export_session:
+                    try:
+                        export_session.close()
+                        self.log_message("Export session closed successfully.")
+                    except Exception as e:
+                        self.log_message(f"Warning: Error closing export session: {e}")
                 
         except Exception as e:
             error_msg = f"Failed to export to SCILSLab: {str(e)}"
@@ -740,20 +762,24 @@ class PeakFinderMainWindow(QMainWindow):
                 height: 6px;
                 border-top: none;
                 border-left: none;
-                transform: rotate(45deg);
+                /* transform: rotate(45deg); */
             }
         """)
         
     def closeEvent(self, event):
         """Handle application close event"""
-        # Clean up the session if it exists
-        if hasattr(self, 'session') and self.session:
-            try:
-                self.session.close()
-                self.log_message("SCILSLab session closed.")
-            except Exception as e:
-                print(f"Error closing session: {e}")
+        # Clean up any running threads
+        if hasattr(self, 'training_uploader') and self.training_uploader.isRunning():
+            self.log_message("Stopping training data upload...")
+            self.training_uploader.terminate()
+            self.training_uploader.wait(3000)  # Wait up to 3 seconds
         
+        if hasattr(self, 'processor') and self.processor.isRunning():
+            self.log_message("Stopping data processor...")
+            self.processor.terminate()
+            self.processor.wait(3000)  # Wait up to 3 seconds
+        
+        self.log_message("Application closing...")
         event.accept()
 
     def globus_transfer(self, src_path, dest_path, label=None):
@@ -775,7 +801,7 @@ class PeakFinderMainWindow(QMainWindow):
         """
         # Hardcoded destination collection and client ID
         DST_COLL = "df2e72a2-fe59-46a8-bb32-8ec55fc6d179"
-        CLIENT_ID = "befa84a9-79d2-47e7-98d3-8769290be6ca"
+        CLIENT_ID = "c75bb7e7-6db4-4efc-82f9-b750f98c2d80"
         
         # Get configuration from parameter panel
         config = self.get_globus_config_from_params()
@@ -786,6 +812,20 @@ class PeakFinderMainWindow(QMainWindow):
             self.log_message(f"❌ Globus configuration error: {error_msg}")
             self.log_message("Please check your settings in the ⚙️ Parameters tab")
             return None
+            
+        def convert_windows_to_globus_path(windows_path):
+            """Convert Windows path to Globus-compatible Unix-style path"""
+            # Convert backslashes to forward slashes
+            globus_path = windows_path.replace('\\', '/')
+            
+            # Handle Windows drive letters (e.g., "E:/file.txt" -> "/E/file.txt")
+            if len(globus_path) >= 2 and globus_path[1] == ':':
+                drive_letter = globus_path[0].upper()
+                rest_of_path = globus_path[2:]  # Remove drive letter and colon
+                globus_path = f"/{drive_letter}{rest_of_path}"
+            
+            return globus_path
+        
         SRC_COLL = config.get("src_collection_id", "")
         CLIENT_SECRET = config.get("client_secret", "")
         
@@ -811,8 +851,17 @@ class PeakFinderMainWindow(QMainWindow):
             # Create transfer data
             if label is None:
                 label = f"Transfer: {os.path.basename(src_path)} → {os.path.basename(dest_path)}"
-                
-            self.log_message(f"📦 Preparing transfer: {src_path} → {dest_path}")
+            
+            # Convert Windows paths to Globus-compatible format
+            globus_src_path = convert_windows_to_globus_path(src_path)
+            globus_dest_path = convert_windows_to_globus_path(dest_path)
+            
+            self.log_message(f"📦 Preparing transfer:")
+            self.log_message(f"   Windows src:  {src_path}")
+            self.log_message(f"   Globus src:   {globus_src_path}")
+            self.log_message(f"   Windows dest: {dest_path}")
+            self.log_message(f"   Globus dest:  {globus_dest_path}")
+            
             tdata = TransferData(
                 tc,
                 source_endpoint=SRC_COLL,
@@ -823,8 +872,8 @@ class PeakFinderMainWindow(QMainWindow):
                 preserve_timestamp=True,
             )
             
-            # Add the file to transfer
-            tdata.add_item(src_path, dest_path)
+            # Add the file to transfer using converted paths
+            tdata.add_item(globus_src_path, globus_dest_path)
             
             # Submit the transfer
             self.log_message("🚀 Submitting transfer...")
@@ -833,9 +882,14 @@ class PeakFinderMainWindow(QMainWindow):
             
             self.log_message(f"✅ Transfer submitted successfully!")
             self.log_message(f"   Task ID: {task_id}")
-            self.log_message(f"   Source: {src_path}")
-            self.log_message(f"   Destination: {dest_path}")
+            self.log_message(f"   Source: {globus_src_path}")
+            self.log_message(f"   Destination: {globus_dest_path}")
             self.log_message(f"   Label: {label}")
+            
+            if tc.task_wait(task_id, timeout=120):
+                self.log_message("🎉 Transfer completed successfully!")
+            else:
+                self.log_message("⚠️ Transfer did not complete within the timeout period.")
             
             return task_id
             
@@ -858,113 +912,61 @@ class PeakFinderMainWindow(QMainWindow):
             
             return None
 
-    def prepare_training_data(self):
-        """Prepare and upload training data if checkbox is selected"""
+    def prepare_training_data(self, data_df=None):
+        """Start training data preparation and upload in background thread
+        
+        Args:
+            data_df: DataFrame to use for training data. If None, uses self.processed_df
+        """
         if not self.use_for_training_check.isChecked():
             return
             
-        if self.processed_df is None or self.current_spectrum_data is None:
+        # Use provided DataFrame or fall back to processed_df
+        training_data_df = data_df if data_df is not None else self.processed_df
+        
+        if training_data_df is None or self.current_spectrum_data is None:
             self.log_message("❌ No processed data available for training upload")
             return
             
-        try:
-            self.log_message("📊 Preparing training data...")
-            
-            # Get molecule type
-            molecule_type = self.molecule_type_combo.currentText()
-            
-            # Create training CSV with enhanced features
-            training_df = self.processed_df.copy()
-            training_df['molecule_type'] = molecule_type
-            
-            # Add additional features that might be useful for training
-            if 'peak_intensity' in training_df.columns:
-                training_df['log_intensity'] = np.log10(training_df['peak_intensity'] + 1)
-            
-            if 'left_boundary_mz' in training_df.columns and 'right_boundary_mz' in training_df.columns:
-                training_df['peak_width_ppm'] = ((training_df['right_boundary_mz'] - training_df['left_boundary_mz']) / training_df['m/z'] * 1e6)
-            
-            # Add spectrum statistics
-            if self.current_spectrum_data and 'mz' in self.current_spectrum_data:
-                mz_array = self.current_spectrum_data['mz']
-                intensities = self.current_spectrum_data['intensities']
-                
-                # Add mean spectrum statistics
-                training_df['total_spectrum_points'] = len(mz_array)
-                training_df['mean_spectrum_intensity'] = np.mean(intensities)
-                training_df['max_spectrum_intensity'] = np.max(intensities)
-                
-                # Calculate relative intensity (if peak_intensity exists)
-                if 'peak_intensity' in training_df.columns:
-                    max_intensity = np.max(intensities)
-                    training_df['relative_intensity'] = training_df['peak_intensity'] / max_intensity
-            
-            # Save training CSV
-            import tempfile
-            import datetime
-            
-            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            csv_filename = f"training_data_{molecule_type}_{timestamp}.csv"
-            
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as temp_file:
-                training_df.to_csv(temp_file.name, index=False)
-                temp_csv_path = temp_file.name
-            
-            # Save mean spectrum data
-            spectrum_filename = f"mean_spectrum_{molecule_type}_{timestamp}.npz"
-            with tempfile.NamedTemporaryFile(mode='wb', suffix='.npz', delete=False) as temp_file:
-                np.savez_compressed(temp_file.name, 
-                                  mz=self.current_spectrum_data['mz'],
-                                  intensities=self.current_spectrum_data['intensities'])
-                temp_spectrum_path = temp_file.name
-            
-            self.log_message(f"📁 Created training files:")
-            self.log_message(f"   CSV: {csv_filename}")
-            self.log_message(f"   Spectrum: {spectrum_filename}")
-            
-            # Upload to Globus
-            csv_task_id = self.globus_transfer(temp_csv_path, f"training_data/{csv_filename}", 
-                                             f"Training data - {molecule_type}")
-            
-            spectrum_task_id = self.globus_transfer(temp_spectrum_path, f"training_data/{spectrum_filename}",
-                                                  f"Mean spectrum - {molecule_type}")
-            
-            # Clean up temporary files
-            try:
-                os.unlink(temp_csv_path)
-                os.unlink(temp_spectrum_path)
-            except:
-                pass
-                
-            if csv_task_id and spectrum_task_id:
-                self.log_message(f"🎯 Training data upload initiated successfully!")
-                self.log_message(f"   CSV Task ID: {csv_task_id}")
-                self.log_message(f"   Spectrum Task ID: {spectrum_task_id}")
-            elif not csv_task_id and not spectrum_task_id:
-                self.log_message("⚠️ Training data upload failed completely")
-                self.log_message("   Check your Globus configuration in ⚙️ Parameters tab")
-            else:
-                if not csv_task_id:
-                    self.log_message("⚠️ CSV upload failed, but spectrum upload succeeded")
-                if not spectrum_task_id:
-                    self.log_message("⚠️ Spectrum upload failed, but CSV upload succeeded")
-                self.log_message("   Check logs above for specific error details")
-                
-        except Exception as e:
-            error_msg = str(e)
-            self.log_message(f"⚠️ Training data preparation failed: {error_msg}")
-            
-            # Provide specific guidance based on error type
-            if "file" in error_msg.lower() or "path" in error_msg.lower():
-                self.log_message("💡 This appears to be a file system error.")
-                self.log_message("   Please check file permissions and available disk space.")
-            elif "network" in error_msg.lower() or "connection" in error_msg.lower():
-                self.log_message("💡 This appears to be a network error.")
-                self.log_message("   Please check your internet connection.")
-            else:
-                self.log_message("💡 Please check your data and configuration.")
-                
-            self.log_message("Processing continues normally...")
+        # Get molecule type and upload config
+        molecule_type = self.molecule_type_combo.currentText()
+        upload_config = self.parameter_panel.get_upload_config()
+        
+        # Validate upload configuration
+        is_valid, error_msg = self.parameter_panel.validate_upload_config()
+        if not is_valid:
+            self.log_message(f"❌ Globus configuration error: {error_msg}")
+            self.log_message("Please check your settings in the ⚙️ Parameters tab")
+            return
+        
+        # Start the upload thread
+        upload_type = "final annotated data" if data_df is not None else "processed data"
+        self.log_message(f"🚀 Starting training data upload in background ({upload_type})...")
+        self.training_uploader = TrainingDataUploader(
+            processed_df=training_data_df.copy(),  # Make a copy to avoid threading issues
+            spectrum_data=self.current_spectrum_data.copy(),
+            molecule_type=molecule_type,
+            upload_config=upload_config
+        )
+        
+        # Connect signals
+        self.training_uploader.progress_update.connect(self.log_message)
+        self.training_uploader.upload_complete.connect(self.on_training_upload_complete)
+        
+        # Start the thread
+        self.training_uploader.start()
+
+    def on_training_upload_complete(self, success, message):
+        """Handle training data upload completion"""
+        if success:
+            self.log_message("✅ Training data upload completed successfully")
+        else:
+            self.log_message(f"❌ Training data upload failed: {message}")
+        
+        # Clean up the thread reference
+        if hasattr(self, 'training_uploader'):
+            self.training_uploader.deleteLater()
+            delattr(self, 'training_uploader')
     
     def open_config_dialog(self):
         """Open configuration dialog"""

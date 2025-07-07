@@ -25,19 +25,24 @@ class IonImageProcessor(QThread):
     image_ready = pyqtSignal(list, float, float, str)
     processing_error = pyqtSignal(str)
     
-    def __init__(self, session, min_mz, max_mz, region_id="Regions"):
+    def __init__(self, slx_file_path, min_mz, max_mz, region_id="Regions"):
         super().__init__()
-        self.session = session
+        self.slx_file_path = slx_file_path
         self.min_mz = min_mz
         self.max_mz = max_mz
         self.region_id = region_id
         
     def run(self):
         """Load ion images in background thread"""
+        session = None
         try:
             self.progress_update.emit(f"Loading ion images for m/z {self.min_mz:.4f} - {self.max_mz:.4f}...")
             
-            dataset = self.session.dataset_proxy
+            # Create session on demand
+            from scilslab import LocalSession
+            session = LocalSession(filename=self.slx_file_path)
+            
+            dataset = session.dataset_proxy
             ion_images = dataset.get_ion_images(self.min_mz, self.max_mz, self.region_id)
             
             if not ion_images:
@@ -49,6 +54,13 @@ class IonImageProcessor(QThread):
             
         except Exception as e:
             self.processing_error.emit(f"Error loading ion images: {str(e)}")
+        finally:
+            # Always close the session
+            if session:
+                try:
+                    session.close()
+                except Exception as e:
+                    self.processing_error.emit(f"Warning: Error closing session: {str(e)}")
 
 
 class IonImageCanvas(FigureCanvas):
@@ -135,7 +147,7 @@ class IonImageViewer(QWidget):
     
     def __init__(self):
         super().__init__()
-        self.session = None
+        self.slx_file_path = None
         self.current_ion_images = None
         self.processor_thread = None
         self.current_min_mz = None  # Store current m/z range for navigation
@@ -219,14 +231,14 @@ class IonImageViewer(QWidget):
         
         return group
         
-    def set_session(self, session):
-        """Set the SCILSLab session"""
-        self.session = session
+    def set_slx_file(self, slx_file_path):
+        """Set the SLX file path for on-demand session creation"""
+        self.slx_file_path = slx_file_path
             
     def set_mz_range_and_load(self, min_mz, max_mz, region_id):
         """Set m/z range and automatically load ion images"""
-        if not self.session:
-            QMessageBox.warning(self, "No Session", "No SCILSLab session available. Please process data first.")
+        if not hasattr(self, 'slx_file_path') or not self.slx_file_path:
+            QMessageBox.warning(self, "No SLX File", "No SLX file available. Please process data first.")
             return
         
         # Store the current m/z range for navigation
@@ -237,7 +249,7 @@ class IonImageViewer(QWidget):
         self.progress_bar.setVisible(True)
         self.progress_bar.setRange(0, 0)  # Indeterminate progress
         
-        self.processor_thread = IonImageProcessor(self.session, min_mz, max_mz, region_id)
+        self.processor_thread = IonImageProcessor(self.slx_file_path, min_mz, max_mz, region_id)
         self.processor_thread.image_ready.connect(self.on_images_loaded)
         self.processor_thread.processing_error.connect(self.on_processing_error)
         self.processor_thread.start()

@@ -83,11 +83,25 @@ class DataProcessor(QThread):
                 right_ppm=self.parameters.get('right_ppm', 50.0),
                 min_intensity_ratio=self.parameters.get('min_intensity_ratio', 0.01)
             )
-              # Prepare spectrum data for the viewer
+            # Prepare spectrum data for the viewer with validation
+            # Remove any NaN or infinite values that could cause plotting issues
+            valid_mask = np.isfinite(mz) & np.isfinite(intensities)
+            if not np.any(valid_mask):
+                raise ValueError("All spectrum data points are invalid (NaN or infinite)")
+            
+            # Apply validation mask
+            valid_mz = mz[valid_mask]
+            valid_intensities = intensities[valid_mask]
+            
+            # Clip extreme intensity values to prevent overflow in plotting
+            valid_intensities = np.clip(valid_intensities, 0, 1e12)
+            
             spectrum_data = {
-                'mz': mz,
-                'intensities': intensities
+                'mz': valid_mz,
+                'intensities': valid_intensities
             }
+            
+            self.progress_update.emit(f"Spectrum validation: {len(valid_mz)} valid points out of {len(mz)} total")
             
             # Keep session alive and pass it to main window for ion image viewing
             # Note: The main window will be responsible for closing the session
