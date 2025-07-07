@@ -49,6 +49,9 @@ jobs:
 
       - name: Install Dependencies
         run: uv sync --locked --all-extras --dev
+      
+      - name: Install scilslab wheels
+        run: uv add wheel\scilslab-8.0.121-cp311-cp311-win_amd64.whl
 
       - name: Show Python and package info (debug)
         if: ${{ inputs.debug_mode == true || inputs.debug_mode == '' }}
