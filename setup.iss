@@ -16,10 +16,12 @@ InfoBeforeFile=
 InfoAfterFile=
 OutputDir=installer
 OutputBaseFilename=PeakFinderPro-Setup
-SetupIconFile=
+SetupIconFile=icon.ico
 Compression=lzma
 SolidCompression=yes
 WizardStyle=modern
+WizardImageFile=wizard-large.bmp
+WizardSmallImageFile=wizard-small.bmp
 PrivilegesRequired=lowest
 ArchitecturesAllowed=x64
 ArchitecturesInstallIn64BitMode=x64
@@ -36,10 +38,10 @@ Source: "dist\PeakFinderPro\*"; DestDir: "{app}"; Flags: ignoreversion recursesu
 ; NOTE: Don't use "Flags: ignoreversion" on any shared system files
 
 [Icons]
-Name: "{group}\Peak Finder Pro"; Filename: "{app}\PeakFinderPro.exe"
+Name: "{group}\Peak Finder Pro"; Filename: "{app}\PeakFinderPro.exe"; IconFilename: "{app}\PeakFinderPro.exe"; IconIndex: 0
 Name: "{group}\{cm:UninstallProgram,Peak Finder Pro}"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\Peak Finder Pro"; Filename: "{app}\PeakFinderPro.exe"; Tasks: desktopicon
-Name: "{userappdata}\Microsoft\Internet Explorer\Quick Launch\Peak Finder Pro"; Filename: "{app}\PeakFinderPro.exe"; Tasks: quicklaunchicon
+Name: "{autodesktop}\Peak Finder Pro"; Filename: "{app}\PeakFinderPro.exe"; IconFilename: "{app}\PeakFinderPro.exe"; IconIndex: 0; Tasks: desktopicon
+Name: "{userappdata}\Microsoft\Internet Explorer\Quick Launch\Peak Finder Pro"; Filename: "{app}\PeakFinderPro.exe"; IconFilename: "{app}\PeakFinderPro.exe"; IconIndex: 0; Tasks: quicklaunchicon
 
 [Run]
 Filename: "{app}\PeakFinderPro.exe"; Description: "{cm:LaunchProgram,Peak Finder Pro}"; Flags: nowait postinstall skipifsilent

@@ -15,36 +15,70 @@ a = Analysis(
         ('gui', 'gui'),
     ],
     hiddenimports=[
+        # Core PyQt6 modules
         'PyQt6.QtCore',
         'PyQt6.QtGui', 
         'PyQt6.QtWidgets',
+        
+        # Globus SDK modules
         'globus_sdk',
-        'scipy',
-        'matplotlib',
+        'globus_sdk.auth',
+        'globus_sdk.transfer',
+        'globus_sdk.search',
+        'globus_sdk.groups',
+        'globus_sdk.gcs',
+        'globus_sdk.flows',
+        'globus_sdk.compute',
+        'globus_sdk.timer',
+        'globus_sdk.services',
+        'globus_sdk.exc',
+        'globus_sdk.response',
+        'globus_sdk.client',
+        'globus_sdk.config',
+        'globus_sdk.utils',
+        'globus_sdk._lazy_import',
+        'globus_sdk.version',
+        
+        # Scientific computing
         'numpy',
         'pandas',
+        'scipy',
+        'scipy.special',
+        'scipy.special._cdflib',
+        'scipy.linalg',
+        'scipy.sparse',
+        'scipy.stats',
+        
+        # Plotting libraries
+        'matplotlib',
+        'matplotlib.backends',
+        'matplotlib.backends.backend_qt5agg',
         'plotly',
+        'pyqtgraph',
+        'pyqtgraph.graphicsItems',
+        'pyqtgraph.widgets',
+        
+        # SCILSLab
+        'scilslab',
+        
+        # Package management (legacy support)
+        'pkg_resources',
+        'importlib_metadata',
     ],
-    hookspath=[],
+    hookspath=[str(current_dir)],  # Use current directory for custom hooks
     hooksconfig={},
     runtime_hooks=[],
     excludes=[
         'tkinter',
         'matplotlib.backends.backend_tk',
+        'pyqtgraph.opengl',  # Exclude OpenGL to avoid missing dependency
+        'OpenGL',  # Exclude PyOpenGL if not needed
+        'globus_sdk._testing',  # Exclude testing modules
+        'responses',  # Exclude test dependency
     ],
     noarchive=False,
     optimize=0,
 )
-
-# Add config file if it exists
-config_file = current_dir / 'config.json'
-if config_file.exists():
-    a.datas.append(('config.json', str(config_file), 'DATA'))
-
-# Add CSV files if they exist
-csv_files = list(current_dir.glob('*.csv'))
-for csv_file in csv_files:
-    a.datas.append((csv_file.name, str(csv_file), 'DATA'))
 
 pyz = PYZ(a.pure)
 
@@ -64,7 +98,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=None,  # Add icon path if you have one: 'icon.ico'
+    icon=str(current_dir / 'icon.ico') if (current_dir / 'icon.ico').exists() else None,
 )
 
 coll = COLLECT(
