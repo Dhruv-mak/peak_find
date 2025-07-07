@@ -33,13 +33,14 @@ Name: "quicklaunchicon"; Description: "{cm:CreateQuickLaunchIcon}"; GroupDescrip
 
 [Files]
 Source: "dist\PeakFinderPro\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "icon.ico"; DestDir: "{app}"; Flags: ignoreversion
 ; NOTE: Don't use "Flags: ignoreversion" on any shared system files
 
 [Icons]
-Name: "{group}\Peak Finder Pro"; Filename: "{app}\PeakFinderPro.exe"; IconFilename: "{app}\PeakFinderPro.exe"; IconIndex: 0
+Name: "{group}\Peak Finder Pro"; Filename: "{app}\PeakFinderPro.exe"; IconFilename: "{app}\icon.ico"
 Name: "{group}\{cm:UninstallProgram,Peak Finder Pro}"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\Peak Finder Pro"; Filename: "{app}\PeakFinderPro.exe"; IconFilename: "{app}\PeakFinderPro.exe"; IconIndex: 0; Tasks: desktopicon
-Name: "{userappdata}\Microsoft\Internet Explorer\Quick Launch\Peak Finder Pro"; Filename: "{app}\PeakFinderPro.exe"; IconFilename: "{app}\PeakFinderPro.exe"; IconIndex: 0; Tasks: quicklaunchicon
+Name: "{autodesktop}\Peak Finder Pro"; Filename: "{app}\PeakFinderPro.exe"; IconFilename: "{app}\icon.ico"; Tasks: desktopicon
+Name: "{userappdata}\Microsoft\Internet Explorer\Quick Launch\Peak Finder Pro"; Filename: "{app}\PeakFinderPro.exe"; IconFilename: "{app}\icon.ico"; Tasks: quicklaunchicon
 
 [Run]
 Filename: "{app}\PeakFinderPro.exe"; Description: "{cm:LaunchProgram,Peak Finder Pro}"; Flags: nowait postinstall skipifsilent
